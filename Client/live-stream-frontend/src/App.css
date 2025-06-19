@@ -1,0 +1,72 @@
+/* src/App.css */
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.App {
+  font-family: Arial, sans-serif;
+  padding: 20px;
+  background-color: #282c34; /* Dark background */
+  min-height: 100vh;
+  color: white;
+  border-radius: 10px;
+}
+
+.App-header {
+  margin-bottom: 20px;
+}
+
+h1 {
+  color: #61dafb; /* React blue */
+}
+
+.video-container {
+  margin: 20px auto;
+  border: 2px solid #61dafb;
+  border-radius: 8px;
+  overflow: hidden;
+  max-width: 640px;
+  background-color: black;
+}
+
+.local-video {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.controls button {
+  background-color: #61dafb;
+  color: #282c34;
+  border: none;
+  padding: 10px 20px;
+  margin: 0 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 1em;
+  transition: background-color 0.3s ease;
+}
+
+.controls button:hover {
+  background-color: #21a1f1;
+}
+
+.controls button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+.status {
+  margin-top: 20px;
+  font-size: 1.1em;
+  color: #a0a0a0;
+}
+
+.error-message {
+  color: #ff6b6b;
+  font-weight: bold;
+  margin-top: 10px;
+}
