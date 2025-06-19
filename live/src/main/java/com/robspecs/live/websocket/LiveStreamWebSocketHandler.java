@@ -1,6 +1,5 @@
+// src/main/java/com/robspecs/live/websocket/LiveStreamWebSocketHandler.java
 package com.robspecs.live.websocket;
-
-
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,97 +11,126 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 import org.springframework.web.util.UriTemplate;
 
+import com.robspecs.live.ffmpeg.FFmpegProcessManager; // <-- NEW IMPORT
+
 import java.io.IOException;
+import java.io.OutputStream; // <-- NEW IMPORT
 import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-@Component // Makes this class a Spring managed component (bean)
+@Component
 public class LiveStreamWebSocketHandler extends AbstractWebSocketHandler {
 
- private static final Logger logger = LoggerFactory.getLogger(LiveStreamWebSocketHandler.class);
+    private static final Logger logger = LoggerFactory.getLogger(LiveStreamWebSocketHandler.class);
 
- // Map to hold active WebSocket sessions, keyed by streamId
- // For a real application, consider a more robust session management.
- private final Map<String, WebSocketSession> activeStreams = new ConcurrentHashMap<>();
+    // Map to hold active WebSocket sessions, keyed by streamId
+    // We keep this to manage WebSocket sessions, not FFmpeg processes directly
+    private final Map<String, WebSocketSession> activeSessions = new ConcurrentHashMap<>(); // Renamed from activeStreams
 
- // We'll use this to extract the streamId from the WebSocket URI
- private final UriTemplate liveStreamUriTemplate = new UriTemplate("/live-stream/{streamId}");
+    // Map to hold the OutputStream to FFmpeg for each streamId
+    private final Map<String, OutputStream> ffmpegInputStreams = new ConcurrentHashMap<>(); // To send data to ffmpeg
 
- public LiveStreamWebSocketHandler() {
-     logger.info("LiveStreamWebSocketHandler initialized.");
- }
+    private final UriTemplate liveStreamUriTemplate = new UriTemplate("/live-stream/{streamId}");
 
- @Override
- public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-     String streamId = getStreamIdFromSession(session);
+    private final FFmpegProcessManager ffmpegProcessManager; // <-- NEW: Inject FFmpegProcessManager
 
-     if (streamId == null || streamId.isEmpty()) {
-         logger.warn("WebSocket session established with no streamId in URI: {}", session.getUri());
-         session.close(CloseStatus.BAD_DATA.withReason("Missing streamId in URI"));
-         return;
-     }
+    public LiveStreamWebSocketHandler(FFmpegProcessManager ffmpegProcessManager) { // <-- NEW: Constructor Injection
+        this.ffmpegProcessManager = ffmpegProcessManager;
+        logger.info("LiveStreamWebSocketHandler initialized with FFmpegProcessManager.");
+    }
 
-     activeStreams.put(streamId, session); // Store the session
-     logger.info("WebSocket connection established for streamId: {}. Session ID: {}", streamId, session.getId());
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        String streamId = getStreamIdFromSession(session);
 
-     // For now, no FFmpeg process is started. This will be Phase 1.5.
-     // You could send a confirmation back to the client here if needed.
-     // session.sendMessage(new TextMessage("Connected to live stream: " + streamId));
- }
+        if (streamId == null || streamId.isEmpty()) {
+            logger.warn("WebSocket session established with no streamId in URI: {}", session.getUri());
+            session.close(CloseStatus.BAD_DATA.withReason("Missing streamId in URI"));
+            return;
+        }
 
- @Override
- protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
-     String streamId = getStreamIdFromSession(session);
-     if (streamId == null) {
-         logger.warn("Received binary message from session {} with no associated streamId. Closing session.", session.getId());
-         session.close(CloseStatus.BAD_DATA.withReason("Missing streamId for message processing"));
-         return;
-     }
+        activeSessions.put(streamId, session); // Store the WebSocket session
 
-     logger.debug("Received binary message for streamId: {} ({} bytes)", streamId, message.getPayload().remaining());
+        try {
+            // Start the FFmpeg process for this stream
+            OutputStream ffmpegIn = ffmpegProcessManager.startFFmpegProcess(streamId);
+            ffmpegInputStreams.put(streamId, ffmpegIn); // Store the OutputStream
+            logger.info("FFmpeg process successfully started for streamId: {}", streamId);
+        } catch (IOException e) {
+            logger.error("Failed to start FFmpeg process for streamId {}: {}", streamId, e.getMessage(), e);
+            session.close(CloseStatus.SERVER_ERROR.withReason("Failed to start streaming backend"));
+            return;
+        }
 
-     // Currently, we're just receiving and logging.
-     // In Phase 1.5, this is where you'll pipe the data to FFmpeg's stdin.
- }
+        logger.info("WebSocket connection established for streamId: {}. Session ID: {}", streamId, session.getId());
+    }
 
- @Override
- public void handleMessage(WebSocketSession session, WebSocketMessage<?> message) throws Exception {
-     // This method is called for all message types.
-     // Since handleBinaryMessage is overridden, BinaryMessages will be routed there.
-     // If you were to send TextMessages from frontend, you'd override handleTextMessage.
-     super.handleMessage(session, message);
- }
+    @Override
+    protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) throws Exception {
+        String streamId = getStreamIdFromSession(session);
+        if (streamId == null) {
+            logger.warn("Received binary message from session {} with no associated streamId. Closing session.", session.getId());
+            session.close(CloseStatus.BAD_DATA.withReason("Missing streamId for message processing"));
+            return;
+        }
 
- @Override
- public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
-     String streamId = getStreamIdFromSession(session);
-     logger.error("WebSocket transport error for streamId {}: {}", streamId, exception.getMessage(), exception);
-     // Future: Clean up associated FFmpeg process, etc.
- }
+        OutputStream ffmpegIn = ffmpegInputStreams.get(streamId);
+        if (ffmpegIn == null) {
+            logger.warn("No FFmpeg process found for streamId {}. Discarding message.", streamId);
+            // Optionally, close session if no FFmpeg process is running for it
+            // session.close(CloseStatus.SERVER_ERROR.withReason("FFmpeg process not active"));
+            return;
+        }
 
- @Override
- public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-     String streamId = getStreamIdFromSession(session);
+        try {
+            // Write the binary video data directly to FFmpeg's stdin
+            ffmpegIn.write(message.getPayload().array());
+            logger.debug("Piped {} bytes to FFmpeg for streamId: {}", message.getPayload().array().length, streamId);
+        } catch (IOException e) {
+            logger.error("Error piping data to FFmpeg for streamId {}: {}", streamId, e.getMessage());
+            // This usually means FFmpeg process died or pipe broke.
+            // Close the WebSocket session to signal the client.
+            session.close(CloseStatus.SERVICE_RESTARTED.withReason("Stream processing error"));
+        }
+    }
 
-     if (streamId != null) {
-         activeStreams.remove(streamId); // Remove the session
-         logger.info("WebSocket connection closed for streamId: {}. Session ID: {}. Status: {}", streamId, session.getId(), status);
-         // Future: Stop FFmpeg process, finalize HLS, update stream status in DB
-     } else {
-         logger.warn("WebSocket connection closed for session {} with no associated streamId. Status: {}", session.getId(), status);
-     }
- }
+    @Override
+    public void handleMessage(WebSocketSession session, WebSocketMessage<?> message) throws Exception {
+        // We only expect BinaryMessages for video data.
+        // If you send TextMessages for chat, you'd override handleTextMessage.
+        super.handleMessage(session, message);
+    }
 
- // Helper method to extract streamId from the session's URI
- private String getStreamIdFromSession(WebSocketSession session) {
-     URI uri = session.getUri();
-     if (uri == null) {
-         return null;
-     }
-     // The URI path is like /live-stream/stream-1750323159034
-     // UriTemplate helps extract 'stream-1750323159034' as streamId
-     Map<String, String> vars = liveStreamUriTemplate.match(uri.getPath());
-     return vars.get("streamId");
- }
+    @Override
+    public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
+        String streamId = getStreamIdFromSession(session);
+        logger.error("WebSocket transport error for streamId {}: {}", streamId, exception.getMessage(), exception);
+        // Clean up FFmpeg process on transport error
+        ffmpegProcessManager.stopFFmpegProcess(streamId);
+    }
+
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        String streamId = getStreamIdFromSession(session);
+
+        if (streamId != null) {
+            activeSessions.remove(streamId);
+            ffmpegInputStreams.remove(streamId); // Remove the stream from map
+            logger.info("WebSocket connection closed for streamId: {}. Session ID: {}. Status: {}", streamId, session.getId(), status);
+            // Stop the associated FFmpeg process
+            ffmpegProcessManager.stopFFmpegProcess(streamId);
+        } else {
+            logger.warn("WebSocket connection closed for session {} with no associated streamId. Status: {}", session.getId(), status);
+        }
+    }
+
+    private String getStreamIdFromSession(WebSocketSession session) {
+        URI uri = session.getUri();
+        if (uri == null) {
+            return null;
+        }
+        Map<String, String> vars = liveStreamUriTemplate.match(uri.getPath());
+        return vars.get("streamId");
+    }
 }

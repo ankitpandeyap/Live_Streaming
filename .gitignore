@@ -4,7 +4,7 @@ target/
 .settings/
 .factorypath
 live/logs
-
+videos-data/
 
 # RAR archives
 *.rar
