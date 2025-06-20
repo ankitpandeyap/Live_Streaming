@@ -35,7 +35,7 @@ public class WebSocketConfig implements WebSocketConfigurer {
                 .setAllowedOrigins("*"); // Allow all origins for development (CORS)
         logger.info("WebSocket handler registered for /live-stream/{streamId} with allowed origins: *");
     }
-    
+
     @Bean
     public ServletServerContainerFactoryBean createWebSocketContainer() {
         ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();

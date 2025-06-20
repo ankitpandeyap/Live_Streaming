@@ -1,11 +1,6 @@
 // src/main/java/com/robspecs/live/ffmpeg/FFmpegProcessManager.java
 package com.robspecs.live.ffmpeg;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -17,6 +12,11 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
 
 @Service
 public class FFmpegProcessManager {
@@ -39,22 +39,34 @@ public class FFmpegProcessManager {
 
         // Define FFmpeg arguments as a List of Strings for direct execution
         List<String> ffmpegArgs = Arrays.asList(
-            // --- ADDED THESE TWO FLAGS FOR INPUT FORMAT AND FRAME RATE ---
-            "-f", "webm", // Explicitly declare input format as webm
-            "-r", "30",   // Assume 30 FPS for input. Adjust if your webcam streams at a different rate.
-            // -----------------------------------------------------------
-            "-i", "pipe:0", // Reads from stdin
-            "-c:v", "copy", // Copy video codec if compatible
-            "-c:a", "aac", // Re-encode audio to AAC for better HLS compatibility
-            "-preset", "veryfast", // Encoding preset for speed
-            "-crf", "23", // Constant Rate Factor for quality
-            "-b:a", "128k", // Audio bitrate
-            "-f", "hls", // HLS muxer
-            "-hls_time", "2", // Segment duration in seconds
-            "-hls_list_size", "0", // Keep all segments in playlist (for VOD/rewind)
-            "-hls_flags", "delete_segments+append_list", // HLS flags
-            "-hls_segment_filename", containerOutputPath + "/segment_%d.ts", // Segment filename pattern
-            containerOutputPath + "/index.m3u8" // Output HLS master playlist
+                // Input options for pipe:0
+                "-probesize", "10M", // Analyze 10MB of input to better detect format
+                "-analyzeduration", "10M", // Analyze for 10 million microseconds to better detect stream properties
+                "-i", "pipe:0", // Reads from stdin
+
+                // Video output options (re-encode to H.264)
+                "-c:v", "libx264", // Use H.264 video codec
+                "-preset", "veryfast", // Encoding preset for speed (e.g., ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
+                "-crf", "23", // Constant Rate Factor for quality (lower is better quality, larger file size)
+                "-profile:v", "high", // H.264 profile for broad compatibility
+                "-level", "4.0", // H.264 level for broad compatibility
+                "-sc_threshold", "0", // Disable scene change detection to ensure consistent GOP (Group of Pictures)
+                "-g", "48", // Keyframe interval (e.g., 2 seconds * 24 fps = 48 frames) - adjust based on expected input FPS
+                "-keyint_min", "48", // Minimum keyframe interval
+                "-r", "24", // Explicit output framerate (e.g., 24, 30) - ensure this matches your input or desired output
+
+                // Audio output options (re-encode to AAC)
+                "-c:a", "aac", // Re-encode audio to AAC
+                "-b:a", "128k", // Audio bitrate
+                "-ac", "1", // Audio channels: 1 for mono, 2 for stereo (mono saves bandwidth)
+
+                // HLS muxer options
+                "-f", "hls", // Output format is HLS
+                "-hls_time", "2", // Segment duration in seconds (e.g., 2 seconds)
+                "-hls_list_size", "0", // Keep all segments in playlist (0 means unlimited, useful for VOD/rewind)
+                "-hls_flags", "delete_segments+append_list", // Delete old segments and append new ones
+                "-hls_segment_filename", containerOutputPath + "/segment_%d.ts", // Pattern for segment filenames
+                containerOutputPath + "/index.m3u8" // Output HLS master playlist file
         );
 
         // Docker command to run the FFmpeg container and pass arguments directly
@@ -74,13 +86,12 @@ public class FFmpegProcessManager {
         logger.debug("FFmpeg Docker command: {}", String.join(" ", processBuilder.command())); // This will now show the correct command
 
         Process ffmpegProcess = processBuilder.start();
-
         StreamGobbler errorGobbler = new StreamGobbler(ffmpegProcess.getErrorStream(), msg -> {
-            if (msg.contains("Error") || msg.contains("failed") || msg.contains("Invalid argument")) {
-                logger.error("FFmpeg stderr (ERROR): {}", msg);
-            } else {
-                logger.info("FFmpeg stderr (INFO): {}", msg);
-            }
+            // FFmpeg often outputs informational messages to stderr that are not errors.
+            // We can filter these if they become too noisy, but for now, log as INFO/DEBUG.
+            // For now, let's keep it as ERROR to catch any critical issues.
+            // You might change this to logger.debug or logger.info after initial debugging.
+            logger.error("FFmpeg stderr: {}", msg);
         });
         Executors.newSingleThreadExecutor().submit(errorGobbler);
 
@@ -112,17 +123,17 @@ public class FFmpegProcessManager {
             try {
                 OutputStream os = ffmpegInputStreams.get(streamId);
                 if (os != null) {
-                    os.close();
+                    os.close(); // Close stdin to FFmpeg, signaling end of stream
                     logger.debug("Closed FFmpeg stdin for streamId: {}", streamId);
                 }
                 boolean exited = ffmpegProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
                 if (!exited) {
                     logger.warn("FFmpeg process for streamId {} did not exit gracefully within 5s, forcing destruction.", streamId);
-                    ffmpegProcess.destroyForcibly();
+                    ffmpegProcess.destroyForcibly(); // Force kill if it doesn't exit
                 }
             } catch (IOException | InterruptedException e) {
                 logger.error("Error stopping FFmpeg process for streamId {}: {}", streamId, e.getMessage());
-                ffmpegProcess.destroyForcibly();
+                ffmpegProcess.destroyForcibly(); // Ensure it's killed even on error
             } finally {
                 cleanupFFmpegProcess(streamId);
             }

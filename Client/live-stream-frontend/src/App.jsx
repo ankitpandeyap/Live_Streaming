@@ -1,21 +1,22 @@
 import React, { useRef, useState, useEffect } from 'react';
 import './App.css';
+import HLSPlayer from './components/HLSPlayer'; // Corrected path if needed, assuming 'components' folder
 
 function App() {
   const videoRef = useRef(null);
-  const localStreamRef = useRef(null); // Ref to hold the MediaStream
-  const mediaRecorderRef = useRef(null); // Ref to hold the MediaRecorder instance
-  const webSocketRef = useRef(null); // Ref to hold the WebSocket connection
+  const localStreamRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const webSocketRef = useRef(null);
 
-  const [isStreamingLocal, setIsStreamingLocal] = useState(false); // Tracks local webcam display
-  const [isBroadcasting, setIsBroadcasting] = useState(false); // Tracks active WebSocket broadcast
+  const [isStreamingLocal, setIsStreamingLocal] = useState(false);
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [error, setError] = useState(null);
-  const [streamId, setStreamId] = useState(''); // To hold the ID for this stream
+  const [streamId, setStreamId] = useState('');
 
   // --- WebSocket URL (Adjust as per your backend) ---
   // In development, this will typically be different from your frontend URL.
-  // Assuming your Spring Boot backend runs on localhost:8080
-  const WEBSOCKET_URL = "ws://localhost:8082/live-stream"; // We'll add streamId later
+  // Assuming your Spring Boot backend runs on localhost:8082
+  const WEBSOCKET_URL = "ws://localhost:8082/live-stream";
 
   const startLocalStream = async () => {
     setError(null);
@@ -54,8 +55,6 @@ function App() {
   const startBroadcast = async () => {
     if (!localStreamRef.current) {
       await startLocalStream(); // Ensure local stream is running
-      // Give a moment for the stream to attach, or ideally, await for it
-      // For simplicity here, we'll assume it's ready, but in real app, might need a check
       if (!localStreamRef.current) {
           setError("Failed to start local stream for broadcast.");
           return;
@@ -70,21 +69,18 @@ function App() {
     setError(null);
     try {
       // 1. Generate a unique stream ID (or get one from backend)
-      // For now, let's use a simple timestamp-based ID. In a real app, this would come from your backend.
       const id = `stream-${Date.now()}`;
       setStreamId(id);
       console.log(`Attempting to start broadcast with ID: ${id}`);
 
       // 2. Initialize WebSocket
+      // THIS IS THE CRUCIAL LINE THAT WAS PREVIOUSLY INCORRECT
       webSocketRef.current = new WebSocket(`${WEBSOCKET_URL}/${id}`);
 
       webSocketRef.current.onopen = () => {
         console.log("WebSocket connected for stream:", id);
         // 3. Initialize MediaRecorder once WebSocket is open
         try {
-          // Choose a MIME type supported by your browser and FFmpeg
-          // 'video/webm; codecs=vp8' is widely supported.
-          // 'video/mp4' might require specific browser support (e.g., Safari for H.264)
           const options = { mimeType: 'video/webm; codecs=vp8', timeslice: 500 }; // 500ms chunks
 
           if (!MediaRecorder.isTypeSupported(options.mimeType)) {
@@ -130,7 +126,6 @@ function App() {
 
       webSocketRef.current.onmessage = (event) => {
         console.log("WebSocket message received:", event.data);
-        // You might receive messages from backend here (e.g., confirmation, errors)
       };
 
       webSocketRef.current.onclose = (event) => {
@@ -143,6 +138,7 @@ function App() {
         setIsBroadcasting(false); // Update broadcast status
         mediaRecorderRef.current = null; // Clear MediaRecorder ref
         webSocketRef.current = null; // Clear WebSocket ref
+        setStreamId(''); // Clear streamId on close
       };
 
       webSocketRef.current.onerror = (err) => {
@@ -168,8 +164,6 @@ function App() {
     }
     setIsBroadcasting(false);
     setStreamId('');
-    // Note: stopLocalStream is called separately if user desires.
-    // The cleanup in WebSocket onclose will handle clearing refs.
   };
 
   // Cleanup effect for local stream when component unmounts
@@ -187,8 +181,21 @@ function App() {
       </header>
       <main>
         <div className="video-container">
-          <video ref={videoRef} autoPlay muted playsInline className="local-video"></video>
+          {/* Display local webcam preview */}
+          <div className="local-video-wrapper">
+            <h2>Your Local Stream</h2>
+            <video ref={videoRef} autoPlay muted playsInline className="local-video"></video>
+          </div>
+
           {error && <p className="error-message">{error}</p>}
+
+          {/* Display HLS Player for the live stream */}
+          {isBroadcasting && streamId && (
+            <div className="hls-player-wrapper">
+              <h2>Live HLS Stream (ID: {streamId})</h2>
+              <HLSPlayer streamId={streamId} />
+            </div>
+          )}
         </div>
         <div className="controls">
           {!isBroadcasting ? (
