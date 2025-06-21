@@ -29,15 +29,16 @@ public class FFmpegProcessManager {
     @Value("${files.video.base-path}")
     private String videoBasePath;
 
+    // Confirmed by user: This is the correct Docker image name
     private static final String FFMPEG_DOCKER_IMAGE = "ffmpeg-hls-streamer";
 
     public OutputStream startFFmpegProcess(String streamId) throws IOException {
         Path streamOutputPath = Paths.get(videoBasePath, streamId);
-        Files.createDirectories(streamOutputPath);
+        Files.createDirectories(streamOutputPath); // Ensure the directory exists on the host
 
-        String containerOutputPath = "/app/hls_output";
+        String containerOutputPath = "/app/hls_output"; // Path inside the Docker container
 
-        // Define FFmpeg arguments as a List of Strings for direct execution
+        // Define FFmpeg arguments as a List of Strings
         List<String> ffmpegArgs = Arrays.asList(
                 // Input options for pipe:0
                 "-probesize", "10M", // Analyze 10MB of input to better detect format
@@ -54,17 +55,20 @@ public class FFmpegProcessManager {
                 "-g", "48", // Keyframe interval (e.g., 2 seconds * 24 fps = 48 frames) - adjust based on expected input FPS
                 "-keyint_min", "48", // Minimum keyframe interval
                 "-r", "24", // Explicit output framerate (e.g., 24, 30) - ensure this matches your input or desired output
+                "-pix_fmt", "yuv420p", // Pixel format for broad compatibility
 
                 // Audio output options (re-encode to AAC)
                 "-c:a", "aac", // Re-encode audio to AAC
                 "-b:a", "128k", // Audio bitrate
                 "-ac", "1", // Audio channels: 1 for mono, 2 for stereo (mono saves bandwidth)
 
-                // HLS muxer options
+                // HLS muxer options (Adjusted for live preview - limited playlist size)
                 "-f", "hls", // Output format is HLS
                 "-hls_time", "2", // Segment duration in seconds (e.g., 2 seconds)
-                "-hls_list_size", "0", // Keep all segments in playlist (0 means unlimited, useful for VOD/rewind)
+                "-hls_list_size", "3", // Keep only 3 segments in playlist (e.g., 3 * 2s = 6 seconds of live buffer)
+                                        // This is ideal for current live preview. For full recording (VOD), it would be 0 or a very large number.
                 "-hls_flags", "delete_segments+append_list", // Delete old segments and append new ones
+                "-hls_init_time", "6", // *** NEW ADDITION: Generate 6 seconds (3 segments) before writing the first index.m3u8 ***
                 "-hls_segment_filename", containerOutputPath + "/segment_%d.ts", // Pattern for segment filenames
                 containerOutputPath + "/index.m3u8" // Output HLS master playlist file
         );
@@ -76,7 +80,8 @@ public class FFmpegProcessManager {
         dockerCommand.add("-i"); // Interactive mode to allow stdin
         dockerCommand.add("--rm"); // Automatically remove container on exit
         dockerCommand.add("-v");
-        dockerCommand.add(streamOutputPath.toAbsolutePath().normalize().toString() + ":" + containerOutputPath); // Volume mount
+        // Ensure the host path is correctly normalized for Docker volume mounts on Windows
+        dockerCommand.add(streamOutputPath.toAbsolutePath().normalize().toString() + ":" + containerOutputPath);
         dockerCommand.add(FFMPEG_DOCKER_IMAGE); // The Docker image to use
         dockerCommand.addAll(ffmpegArgs); // Add all FFmpeg arguments directly after the image name
 
@@ -86,21 +91,24 @@ public class FFmpegProcessManager {
         logger.debug("FFmpeg Docker command: {}", String.join(" ", processBuilder.command())); // This will now show the correct command
 
         Process ffmpegProcess = processBuilder.start();
+
+        // Gobble error stream (FFmpeg's main output is usually to stderr)
         StreamGobbler errorGobbler = new StreamGobbler(ffmpegProcess.getErrorStream(), msg -> {
-            // FFmpeg often outputs informational messages to stderr that are not errors.
-            // We can filter these if they become too noisy, but for now, log as INFO/DEBUG.
-            // For now, let's keep it as ERROR to catch any critical issues.
-            // You might change this to logger.debug or logger.info after initial debugging.
+            // Keep as ERROR for now to catch all output, but consider INFO for non-critical messages
             logger.error("FFmpeg stderr: {}", msg);
         });
         Executors.newSingleThreadExecutor().submit(errorGobbler);
 
-        StreamGobbler outputGobbler = new StreamGobbler(ffmpegProcess.getInputStream(), logger::info);
+        // Gobble output stream (FFmpeg usually doesn't output much to stdout)
+        StreamGobbler outputGobbler = new StreamGobbler(ffmpegProcess.getInputStream(), msg -> {
+            logger.info("FFmpeg stdout: {}", msg);
+        });
         Executors.newSingleThreadExecutor().submit(outputGobbler);
 
         activeFFmpegProcesses.put(streamId, ffmpegProcess);
         ffmpegInputStreams.put(streamId, ffmpegProcess.getOutputStream());
 
+        // Monitor FFmpeg process exit
         new Thread(() -> {
             try {
                 int exitCode = ffmpegProcess.waitFor();
@@ -126,6 +134,7 @@ public class FFmpegProcessManager {
                     os.close(); // Close stdin to FFmpeg, signaling end of stream
                     logger.debug("Closed FFmpeg stdin for streamId: {}", streamId);
                 }
+                // Give FFmpeg a bit of time to finish processing and close files
                 boolean exited = ffmpegProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
                 if (!exited) {
                     logger.warn("FFmpeg process for streamId {} did not exit gracefully within 5s, forcing destruction.", streamId);

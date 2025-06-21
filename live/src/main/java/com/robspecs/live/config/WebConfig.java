@@ -6,11 +6,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
-// --- NEW IMPORTS FOR CONTENT NEGOTIATION ---
 import org.springframework.http.MediaType;
 import org.springframework.web.servlet.config.annotation.ContentNegotiationConfigurer;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
-// --- END NEW IMPORTS ---
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -24,8 +22,12 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        String absoluteVideoBasePath = new File(videoBasePath).getAbsolutePath();
-        String hlsServePath = "file:" + absoluteVideoBasePath + File.separator;
+        // Normalize the base path to an absolute path, then prepend "file:///"
+        // This ensures Spring Boot correctly interprets it as a file URI.
+        // Replace backslashes for URL compatibility and ensure a trailing slash for the directory
+        String absoluteVideoBasePath = new File(videoBasePath).getAbsolutePath().replace("\\", "/");
+        String hlsServePath = "file:///" + absoluteVideoBasePath + (absoluteVideoBasePath.endsWith("/") ? "" : "/") ;
+
 
         logger.info("Configuring HLS resource handler:");
         logger.info("  Serving URL path: /hls/**");
@@ -36,16 +38,12 @@ public class WebConfig implements WebMvcConfigurer {
                 .setUseLastModified(true); // Recommended for caching
     }
 
-    // --- NEW METHOD: configureContentNegotiation ---
     @Override
     public void configureContentNegotiation(ContentNegotiationConfigurer configurer) {
-        // Register file extensions and their corresponding media types
         configurer.mediaType("m3u8", MediaType.valueOf("application/x-mpegURL"));
         configurer.mediaType("ts", MediaType.valueOf("video/MP2T"));
         logger.info("Configured content negotiation for .m3u8 (application/x-mpegURL) and .ts (video/MP2T).");
     }
-    // --- END NEW METHOD ---
-
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
