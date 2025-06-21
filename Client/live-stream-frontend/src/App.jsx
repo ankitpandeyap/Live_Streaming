@@ -1,3 +1,5 @@
+// src/App.jsx
+
 import React, { useRef, useState, useEffect } from "react";
 import "./App.css";
 import HLSPlayer from "./components/HLSPlayer"; // Corrected path if needed, assuming 'components' folder
@@ -6,7 +8,8 @@ function App() {
   const videoRef = useRef(null);
   const localStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
-  const webSocketRef = useRef(null);
+  // NEW: rawDataWebSocketRef will be for sending raw media data to Redis via a new backend endpoint
+  const rawDataWebSocketRef = useRef(null); 
 
   const [isStreamingLocal, setIsStreamingLocal] = useState(false);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
@@ -14,10 +17,9 @@ function App() {
   const [streamId, setStreamId] = useState("");
   const [playingRecordedStreamId, setPlayingRecordedStreamId] = useState(null);
 
-  // --- WebSocket URL (Adjust as per your backend) ---
-  // In development, this will typically be different from your frontend URL.
-  // Assuming your Spring Boot backend runs on localhost:8082
-  const WEBSOCKET_URL = "ws://localhost:8082/live-stream";
+  // --- WebSocket URL for sending RAW MEDIA DATA to be published to Redis ---
+  // We'll create a new endpoint in Spring Boot for this.
+  const RAW_DATA_WEBSOCKET_URL = "ws://localhost:8082/raw-media-ingest"; // New endpoint
 
   const startLocalStream = async () => {
     setError(null);
@@ -71,29 +73,30 @@ function App() {
 
     setError(null);
     try {
-      // 1. Generate a unique stream ID (or get one from backend)
+      // 1. Generate a unique stream ID
       const id = `stream-${Date.now()}`;
       setStreamId(id);
       console.log(`Attempting to start broadcast with ID: ${id}`);
 
-      // 2. Initialize WebSocket
-      // THIS IS THE CRUCIAL LINE THAT WAS PREVIOUSLY INCORRECT
-      webSocketRef.current = new WebSocket(`${WEBSOCKET_URL}/${id}`);
+      // 2. Initialize NEW WebSocket for raw data ingestion to Redis
+      // This WebSocket URL will now include the stream ID for the backend to use as the Redis channel.
+      rawDataWebSocketRef.current = new WebSocket(`${RAW_DATA_WEBSOCKET_URL}/${id}`);
 
-      webSocketRef.current.onopen = () => {
-        console.log("WebSocket connected for stream:", id);
+      rawDataWebSocketRef.current.onopen = () => {
+        console.log("Raw data WebSocket connected for stream:", id);
         // 3. Initialize MediaRecorder once WebSocket is open
         try {
           const options = {
-            mimeType: "video/webm; codecs=vp8",
-            timeslice: 500,
-          }; // 500ms chunks
+            mimeType: "video/webm; codecs=vp8", // Use VP8 for broader browser support
+            timeslice: 500, // Send data every 500ms
+            videoBitsPerSecond: 1000000 // Target 1 Mbps for video bitrate
+          }; 
 
           if (!MediaRecorder.isTypeSupported(options.mimeType)) {
             console.warn(
               `${options.mimeType} is not supported, trying fallback...`
             );
-            options.mimeType = "video/webm"; // Fallback
+            options.mimeType = "video/webm"; // Fallback to generic webm
             if (!MediaRecorder.isTypeSupported(options.mimeType)) {
               console.error("No supported MIME type for MediaRecorder found.");
               setError(
@@ -112,10 +115,11 @@ function App() {
           mediaRecorderRef.current.ondataavailable = (event) => {
             if (
               event.data.size > 0 &&
-              webSocketRef.current &&
-              webSocketRef.current.readyState === WebSocket.OPEN
+              rawDataWebSocketRef.current &&
+              rawDataWebSocketRef.current.readyState === WebSocket.OPEN
             ) {
-              webSocketRef.current.send(event.data); // Send Blob data over WebSocket
+              // Send Blob data over the NEW WebSocket to be published to Redis
+              rawDataWebSocketRef.current.send(event.data); 
             }
           };
 
@@ -137,7 +141,7 @@ function App() {
 
           mediaRecorderRef.current.start(options.timeslice); // Start recording with timeslice
           setIsBroadcasting(true);
-          console.log("MediaRecorder started, sending data to WebSocket.");
+          console.log("MediaRecorder started, sending data to Raw Data WebSocket.");
         } catch (mrError) {
           console.error("Error setting up MediaRecorder:", mrError);
           setError("Error setting up MediaRecorder: " + mrError.message);
@@ -145,33 +149,34 @@ function App() {
         }
       };
 
-      webSocketRef.current.onmessage = (event) => {
-        console.log("WebSocket message received:", event.data);
+      rawDataWebSocketRef.current.onmessage = (event) => {
+        // This WebSocket is for sending, not typically receiving, but good to log.
+        console.log("Raw data WebSocket message received:", event.data);
       };
 
-      webSocketRef.current.onclose = (event) => {
-        console.log("WebSocket closed:", event);
+      rawDataWebSocketRef.current.onclose = (event) => {
+        console.log("Raw data WebSocket closed:", event);
         if (!event.wasClean) {
           setError(
-            `WebSocket closed unexpectedly. Code: ${event.code}, Reason: ${event.reason}`
+            `Raw data WebSocket closed unexpectedly. Code: ${event.code}, Reason: ${event.reason}`
           );
         } else {
           setError(null); // Clear error if clean close
         }
         setIsBroadcasting(false); // Update broadcast status
         mediaRecorderRef.current = null; // Clear MediaRecorder ref
-        webSocketRef.current = null; // Clear WebSocket ref
+        rawDataWebSocketRef.current = null; // Clear rawDataWebSocketRef ref
         setStreamId(""); // Clear streamId on close
       };
 
-      webSocketRef.current.onerror = (err) => {
-        console.error("WebSocket error:", err);
-        setError("WebSocket error: Could not connect to streaming server.");
+      rawDataWebSocketRef.current.onerror = (err) => {
+        console.error("Raw data WebSocket error:", err);
+        setError("Raw data WebSocket error: Could not connect to ingestion server.");
         stopBroadcast(); // Attempt to stop everything on error
       };
     } catch (wsError) {
-      console.error("Error setting up WebSocket:", wsError);
-      setError("Error setting up WebSocket: " + wsError.message);
+      console.error("Error setting up Raw data WebSocket:", wsError);
+      setError("Error setting up Raw data WebSocket: " + wsError.message);
       setIsBroadcasting(false);
       setStreamId("");
     }
@@ -185,16 +190,16 @@ function App() {
       mediaRecorderRef.current.stop(); // This will trigger onstop event
     }
     if (
-      webSocketRef.current &&
-      webSocketRef.current.readyState === WebSocket.OPEN
+      rawDataWebSocketRef.current &&
+      rawDataWebSocketRef.current.readyState === WebSocket.OPEN
     ) {
-      webSocketRef.current.close(1000, "User stopped broadcast"); // Clean close
+      rawDataWebSocketRef.current.close(1000, "User stopped broadcast"); // Clean close
     }
     setIsBroadcasting(false);
     setStreamId("");
   };
 
-  // Cleanup effect for local stream when component unmounts
+  // Cleanup effect for local stream and websockets when component unmounts
   useEffect(() => {
     return () => {
       stopBroadcast(); // Ensure broadcast is stopped
