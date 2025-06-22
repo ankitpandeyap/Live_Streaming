@@ -7,11 +7,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays; // Still used, but mostly for initial List creation
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+// import java.util.Comparator; // Not used for current cleanup logic, can be removed if not needed elsewhere
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,12 +29,12 @@ public class FFmpegProcessManager {
     @Value("${files.video.base-path}")
     private String videoBasePath;
 
-    // Confirmed by user: This is the correct Docker image name
     private static final String FFMPEG_DOCKER_IMAGE = "ffmpeg-hls-streamer";
 
     /**
      * Starts a new FFmpeg Docker process for a given streamId.
-     * The process reads raw video/audio data from its stdin and outputs HLS segments.
+     * The process reads raw video/audio data from its stdin and outputs HLS segments
+     * for live preview AND directly saves the original WebM file for VOD recording.
      *
      * @param streamId The unique identifier for the stream.
      * @return The OutputStream connected to FFmpeg's stdin.
@@ -44,14 +44,25 @@ public class FFmpegProcessManager {
         Path streamOutputPath = Paths.get(videoBasePath, streamId);
         Files.createDirectories(streamOutputPath); // Ensure the directory exists on the host
 
-        String containerOutputPath = "/app/hls_output"; // Path inside the Docker container
+        String containerHlsOutputPath = "/app/hls_output"; // Path inside the Docker container for HLS
+        String containerVodOutputPath = "/app/vod_output"; // Path inside the Docker container for VOD
+        // No separate 360p folder needed as we're saving the original WebM
+        // Path vodOutputHostPath = streamOutputPath.resolve("360p"); // REMOVE OR ADJUST THIS IF YOU WANT A DEDICATED VOD FOLDER
+        // Files.createDirectories(vodOutputHostPath); // REMOVE OR ADJUST THIS
+
+        // For VOD, we will now save directly into the streamId folder as WebM
+        Path vodOutputHostPath = streamOutputPath; // VOD will be saved directly in the streamId folder
+        Files.createDirectories(vodOutputHostPath); // Ensure streamId folder exists
+
+        // Docker volume mounts (for HLS and VOD)
+        String hlsVolumeMount = streamOutputPath.toAbsolutePath().normalize().toString().replace("\\", "/") + ":" + containerHlsOutputPath;
+        String vodVolumeMount = vodOutputHostPath.toAbsolutePath().normalize().toString().replace("\\", "/") + ":" + containerVodOutputPath;
+
 
         // Build the FFmpeg arguments as a List of Strings
         List<String> ffmpegArgs = new ArrayList<>();
 
-        // --- Input Configuration ---
-        // IMPORTANT: Explicitly set input format to webm for pipe:0.
-        // This helps FFmpeg correctly interpret the MediaRecorder's output from the frontend.
+        // --- Global Input Configuration ---
         ffmpegArgs.add("-f");
         ffmpegArgs.add("webm"); // Explicitly set input format to WebM
         ffmpegArgs.add("-probesize");
@@ -61,59 +72,81 @@ public class FFmpegProcessManager {
         ffmpegArgs.add("-i");
         ffmpegArgs.add("pipe:0"); // Reads from stdin (where RedisFeederService will write)
 
-        // --- Video Output Options (re-encode to H.264) ---
+
+        // --- Output 1: Live HLS Stream (Original Quality Preview - 720p H.264) ---
+        // This section remains largely the same, optimized for live low-latency preview
+        ffmpegArgs.add("-map");
+        ffmpegArgs.add("0:v"); // Map video stream from input 0
+        ffmpegArgs.add("-map");
+        ffmpegArgs.add("0:a"); // Map audio stream from input 0
+
         ffmpegArgs.add("-c:v");
-        ffmpegArgs.add("libx264"); // Use H.264 video codec
+        ffmpegArgs.add("libx264");
         ffmpegArgs.add("-preset");
-        ffmpegArgs.add("veryfast"); // Encoding preset for speed (e.g., ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow)
-
-        // REPLACEMENT: Using target bitrate instead of CRF for more consistent live stream output
+        ffmpegArgs.add("veryfast");
+        ffmpegArgs.add("-tune"); // Added -tune zerolatency for live streaming
+        ffmpegArgs.add("zerolatency");
         ffmpegArgs.add("-b:v");
-        ffmpegArgs.add("1500k"); // Target video bitrate (e.g., 1.5 Mbps for decent 720p)
+        ffmpegArgs.add("1500k"); // Target video bitrate (adjust as needed for original quality)
         ffmpegArgs.add("-maxrate");
-        ffmpegArgs.add("2000k"); // Maximum video bitrate (e.g., 2 Mbps to avoid spikes)
+        ffmpegArgs.add("2000k");
         ffmpegArgs.add("-bufsize");
-        ffmpegArgs.add("3000k"); // Decoder buffer size (typically 1.5-2x maxrate for VBR, or 2x maxrate for CBR-like)
-
+        ffmpegArgs.add("3000k");
         ffmpegArgs.add("-profile:v");
-        ffmpegArgs.add("high"); // H.264 profile for broad compatibility
+        ffmpegArgs.add("high");
         ffmpegArgs.add("-level");
-        ffmpegArgs.add("4.0"); // H.264 level for broad compatibility
+        ffmpegArgs.add("4.0");
         ffmpegArgs.add("-sc_threshold");
-        ffmpegArgs.add("0"); // Disable scene change detection to ensure consistent GOP (Group of Pictures)
+        ffmpegArgs.add("0");
         ffmpegArgs.add("-g");
-        ffmpegArgs.add("48"); // Keyframe interval (e.g., 2 seconds * 24 fps = 48 frames, for 2-second segments)
+        ffmpegArgs.add("48"); // Keyframe interval (2 seconds * 24 fps = 48 frames)
         ffmpegArgs.add("-keyint_min");
-        ffmpegArgs.add("48"); // Minimum keyframe interval (should match -g for fixed GOP)
+        ffmpegArgs.add("48");
         ffmpegArgs.add("-r");
-        ffmpegArgs.add("24"); // Explicit output framerate (e.g., 24, 30) - align with desired output
+        ffmpegArgs.add("24"); // IMPORTANT: Ensure input frame rate matches this, or remove '-r' for auto-detection if variable.
         ffmpegArgs.add("-pix_fmt");
-        ffmpegArgs.add("yuv420p"); // Pixel format for broad compatibility (especially important for H.264)
+        ffmpegArgs.add("yuv420p");
 
-        // --- Audio Output Options (re-encode to AAC) ---
         ffmpegArgs.add("-c:a");
-        ffmpegArgs.add("aac"); // Re-encode audio to AAC
+        ffmpegArgs.add("aac");
         ffmpegArgs.add("-b:a");
-        ffmpegArgs.add("128k"); // Audio bitrate
+        ffmpegArgs.add("128k");
         ffmpegArgs.add("-ac");
-        ffmpegArgs.add("1"); // Audio channels: 1 for mono, 2 for stereo (mono saves bandwidth and is common for voice-centric streams)
+        ffmpegArgs.add("1");
 
-        // --- HLS Muxer Options (Adjusted for low-latency live preview) ---
         ffmpegArgs.add("-f");
-        ffmpegArgs.add("hls"); // Output format is HLS
+        ffmpegArgs.add("hls");
         ffmpegArgs.add("-hls_time");
-        ffmpegArgs.add("2"); // Segment duration in seconds (e.g., 2 seconds for low latency)
+        ffmpegArgs.add("2");
         ffmpegArgs.add("-hls_list_size");
-        ffmpegArgs.add("3"); // Keep only 3 segments in playlist (e.g., 3 * 2s = 6 seconds of live buffer)
-                             // This is ideal for current live preview. For full recording (VOD), it would be 0 or a very large number.
+        ffmpegArgs.add("3");
         ffmpegArgs.add("-hls_flags");
-        ffmpegArgs.add("delete_segments+append_list"); // Delete old segments and append new ones to the playlist
+        ffmpegArgs.add("delete_segments+append_list");
         ffmpegArgs.add("-hls_init_time");
-        ffmpegArgs.add("6"); // Generate 6 seconds (3 segments) of video before writing the first index.m3u8.
-                             // This ensures the player has enough initial data to start smoothly.
+        ffmpegArgs.add("6");
         ffmpegArgs.add("-hls_segment_filename");
-        ffmpegArgs.add(containerOutputPath + "/segment_%d.ts"); // Pattern for segment filenames
-        ffmpegArgs.add(containerOutputPath + "/index.m3u8"); // Output HLS master playlist file
+        ffmpegArgs.add(containerHlsOutputPath + "/segment_%d.ts");
+        ffmpegArgs.add(containerHlsOutputPath + "/index.m3u8"); // Output HLS master playlist file
+
+
+        // --- Output 2: Direct Save of Original WebM for VOD Recording ---
+        // This output is designed to be a persistent recording in the original incoming format
+        ffmpegArgs.add("-map");
+        ffmpegArgs.add("0:v"); // Map video stream from input 0
+        ffmpegArgs.add("-map");
+        ffmpegArgs.add("0:a"); // Map audio stream from input 0
+
+        ffmpegArgs.add("-c:v");
+        ffmpegArgs.add("copy"); // OPTIMIZATION: Copy video stream without re-encoding
+        ffmpegArgs.add("-c:a");
+        ffmpegArgs.add("copy"); // OPTIMIZATION: Copy audio stream without re-encoding
+        // Removed -preset, -b:v, -maxrate, -bufsize, -vf, -profile:v, -level, -r, -pix_fmt, -ac, -ar as they are for encoding
+        ffmpegArgs.add("-f");
+        ffmpegArgs.add("webm"); // Output format is WebM
+        // Consider adding '-frag_duration 10000000' or similar if you need it to be playable during recording
+        // For simple save, no special movflags needed as it's not MP4
+        ffmpegArgs.add(containerVodOutputPath + "/" + streamId + "_original.webm"); // Output WebM file name
+
 
         // Docker command to run the FFmpeg container and pass arguments directly
         List<String> dockerCommand = new ArrayList<>();
@@ -122,8 +155,9 @@ public class FFmpegProcessManager {
         dockerCommand.add("-i"); // Interactive mode to allow stdin
         dockerCommand.add("--rm"); // Automatically remove container on exit
         dockerCommand.add("-v");
-        // Ensure the host path is correctly normalized for Docker volume mounts on Windows (e.g., /c/Users/...)
-        dockerCommand.add(streamOutputPath.toAbsolutePath().normalize().toString().replace("\\", "/") + ":" + containerOutputPath);
+        dockerCommand.add(hlsVolumeMount); // Mount for HLS output
+        dockerCommand.add("-v");
+        dockerCommand.add(vodVolumeMount); // Mount for VOD output (now directly the streamId folder)
         dockerCommand.add(FFMPEG_DOCKER_IMAGE); // The Docker image to use
         dockerCommand.addAll(ffmpegArgs); // Add all FFmpeg arguments directly after the image name
 
@@ -137,12 +171,9 @@ public class FFmpegProcessManager {
         // Start threads to consume stdout and stderr to prevent blocking the FFmpeg process
         // FFmpeg's verbose output is usually to stderr.
         Executors.newSingleThreadExecutor().submit(new StreamGobbler(ffmpegProcess.getErrorStream(), msg -> {
-            // Keep as ERROR for now to capture all output during debugging.
-            // In production, consider filtering or changing level to INFO for non-critical messages.
-            logger.error("FFmpeg stderr: {}", msg);
+            logger.error("FFmpeg stderr: {}", msg); // Keep as ERROR for now to capture all output during debugging.
         }));
 
-        // FFmpeg usually doesn't output much to stdout unless specifically configured.
         Executors.newSingleThreadExecutor().submit(new StreamGobbler(ffmpegProcess.getInputStream(), msg -> {
             logger.info("FFmpeg stdout: {}", msg);
         }));
@@ -155,6 +186,7 @@ public class FFmpegProcessManager {
             try {
                 int exitCode = ffmpegProcess.waitFor();
                 logger.info("FFmpeg process for streamId {} exited with code {}", streamId, exitCode);
+                // Call cleanup after process exits, ensuring HLS files are removed
                 cleanupFFmpegProcess(streamId);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt(); // Restore interrupt status
@@ -184,16 +216,20 @@ public class FFmpegProcessManager {
                     logger.debug("Closed FFmpeg stdin for streamId: {}", streamId);
                 }
                 // Give FFmpeg a bit of time to finish processing and close files gracefully
-                boolean exited = ffmpegProcess.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+                // This is especially important for the MP4 output to be finalized correctly.
+                boolean exited = ffmpegProcess.waitFor(10, java.util.concurrent.TimeUnit.SECONDS); // Increased timeout for MP4 finalization
                 if (!exited) {
-                    logger.warn("FFmpeg process for streamId {} did not exit gracefully within 5s, forcing destruction.", streamId);
+                    logger.warn("FFmpeg process for streamId {} did not exit gracefully within 10s, forcing destruction.", streamId);
                     ffmpegProcess.destroyForcibly(); // Force kill if it doesn't exit within timeout
                 }
             } catch (IOException | InterruptedException e) {
                 logger.error("Error stopping FFmpeg process for streamId {}: {}", streamId, e.getMessage());
                 ffmpegProcess.destroyForcibly(); // Ensure it's killed even on error
             } finally {
-                cleanupFFmpegProcess(streamId); // Always clean up resources
+                // Cleanup is now called by the monitoring thread *after* process exit (or forced destroy)
+                // This `finally` block ensures resources are removed from maps even if `waitFor` fails,
+                // but the HLS file cleanup logic should ideally run after the process has fully stopped
+                // which is handled by the separate thread calling `cleanupFFmpegProcess`.
             }
         } else {
             logger.info("No active FFmpeg process found for streamId: {}. No action needed.", streamId);
@@ -201,7 +237,8 @@ public class FFmpegProcessManager {
     }
 
     /**
-     * Cleans up internal maps after an FFmpeg process has stopped or been destroyed.
+     * Cleans up internal maps after an FFmpeg process has stopped or been destroyed,
+     * and deletes any remaining HLS files for the stream.
      *
      * @param streamId The unique identifier of the stream.
      */
@@ -209,6 +246,28 @@ public class FFmpegProcessManager {
         activeFFmpegProcesses.remove(streamId);
         ffmpegInputStreams.remove(streamId);
         logger.info("Cleaned up FFmpeg process entry for streamId: {}", streamId);
+
+        // --- Delete lingering HLS files ---
+        Path hlsOutputPath = Paths.get(videoBasePath, streamId);
+        if (Files.exists(hlsOutputPath) && Files.isDirectory(hlsOutputPath)) {
+            try {
+                // Delete index.m3u8 and any remaining .ts files directly under the streamId folder
+                Files.walk(hlsOutputPath)
+                     .filter(path -> path.getFileName().toString().endsWith(".m3u8") || path.getFileName().toString().endsWith(".ts"))
+                     .forEach(path -> {
+                         try {
+                             Files.deleteIfExists(path);
+                             logger.debug("Deleted lingering HLS file: {}", path);
+                         } catch (IOException e) {
+                             logger.warn("Could not delete HLS file {}: {}", path, e.getMessage());
+                         }
+                     });
+                // Note: We are NOT deleting the entire streamId directory or its '360p' subfolder.
+                // The VOD .webm file will remain directly in the streamId folder.
+            } catch (IOException e) {
+                logger.error("Error cleaning up HLS files for streamId {}: {}", streamId, e.getMessage(), e);
+            }
+        }
     }
 
     /**

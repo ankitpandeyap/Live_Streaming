@@ -1,7 +1,7 @@
 # streaming-backend/Dockerfile
 # Use a lightweight base image with FFmpeg already installed
 # This uses the official ffmpeg-full image, which includes all necessary libraries.
-FROM jrottenberg/ffmpeg:4.1-ubuntu
+FROM jrottenberg/ffmpeg:7.1-alpine
 
 # Set a working directory inside the container (optional but good practice)
 WORKDIR /app
