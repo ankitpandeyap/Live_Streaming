@@ -1,4 +1,3 @@
-// src/main/java/com/robspecs/live/config/WebSocketConfig.java
 package com.robspecs.live.config;
 
 import org.slf4j.Logger;
@@ -10,8 +9,7 @@ import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
 
-import com.robspecs.live.websocket.LiveStreamWebSocketHandler;
-import com.robspecs.live.websocket.RawMediaIngestWebSocketHandler; // NEW IMPORT: Import the new handler
+import com.robspecs.live.websocket.RawMediaIngestWebSocketHandler; // Only this one remains
 
 @Configuration
 @EnableWebSocket // Enables WebSocket server capabilities
@@ -19,26 +17,18 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     private static final Logger logger = LoggerFactory.getLogger(WebSocketConfig.class);
 
-    private final LiveStreamWebSocketHandler liveStreamWebSocketHandler;
-    private final RawMediaIngestWebSocketHandler rawMediaIngestWebSocketHandler; // NEW INJECTION: For raw media ingest
+    // Only inject RawMediaIngestWebSocketHandler now
+    private final RawMediaIngestWebSocketHandler rawMediaIngestWebSocketHandler; 
 
-    // Inject both custom WebSocket handlers
-    public WebSocketConfig(LiveStreamWebSocketHandler liveStreamWebSocketHandler,
-                           RawMediaIngestWebSocketHandler rawMediaIngestWebSocketHandler) { // NEW PARAMETER
-        this.liveStreamWebSocketHandler = liveStreamWebSocketHandler;
-        this.rawMediaIngestWebSocketHandler = rawMediaIngestWebSocketHandler; // Assign the new handler
-        logger.info("WebSocketConfig initialized with LiveStreamWebSocketHandler and RawMediaIngestWebSocketHandler.");
+    // Constructor Injection for the remaining handler
+    public WebSocketConfig(RawMediaIngestWebSocketHandler rawMediaIngestWebSocketHandler) { 
+        this.rawMediaIngestWebSocketHandler = rawMediaIngestWebSocketHandler; 
+        logger.info("WebSocketConfig initialized with RawMediaIngestWebSocketHandler.");
     }
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        // Registers our LiveStreamWebSocketHandler
-        // The path /live-stream/{streamId} matches the frontend's WebSocket URL
-        registry.addHandler(liveStreamWebSocketHandler, "/live-stream/{streamId}")
-                .setAllowedOrigins("*"); // Allow all origins for development (CORS)
-        logger.info("WebSocket handler registered for /live-stream/{streamId} with allowed origins: *");
-
-        // NEW REGISTRATION for raw media ingestion
+        // Register the raw media ingestion handler
         registry.addHandler(rawMediaIngestWebSocketHandler, "/raw-media-ingest/{streamId}")
                 .setAllowedOrigins("*"); // Allow all origins for development (CORS)
         logger.info("WebSocket handler registered for /raw-media-ingest/{streamId} with allowed origins: *");
