@@ -24,11 +24,15 @@ function App() {
   const startLocalStream = async () => {
     setError(null);
     try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720 }, // Request specific resolution for consistency
-        audio: true,
-      });
-
+   const mediaStream = await navigator.mediaDevices.getUserMedia({
+    video: {
+     width: { ideal: 1280 }, // Request specific width
+     height: { ideal: 720 }, // Request specific height
+     // --- NEW: Add frameRate constraints here ---
+     frameRate: { ideal: 24, min: 15, max: 30 } // Request 24 FPS, allow browser flexibility
+    },
+    audio: true,
+   });
       localStreamRef.current = mediaStream; // Store stream in ref
       setIsStreamingLocal(true);
 
