@@ -49,17 +49,17 @@ public class JWTValidationFilter extends OncePerRequestFilter {
 			"/api/auth/register", "/api/auth/otp/verify", "/api/auth/otp/request", "/api/auth/forgot-password",
 			"/api/auth/reset-password");
 
-	 @Override
+	@Override
 	protected boolean shouldNotFilter(HttpServletRequest request) throws ServletException {
 		String path = request.getRequestURI();
-		// This filter should NOT run for HLS stream paths, as HlsTokenValidationFilter handles them.
-		// It also should skip other public/authentication endpoints already handled by other filters or explicitly permitted.
+		// This filter should NOT run for HLS stream paths, as HlsTokenValidationFilter
+		// handles them.
+		// It also should skip other public/authentication endpoints already handled by
+		// other filters or explicitly permitted.
 		return path.startsWith("/api/videos/stream/") || // **CRITICAL for HLS**
 				PUBLIC_URLS.contains(path); // Uses your existing PUBLIC_URLS list
 	}
-	
-	
-	
+
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
 			throws ServletException, IOException {

@@ -1,7 +1,5 @@
 package com.robspecs.live.security;
 
-
-
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Set;

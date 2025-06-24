@@ -74,17 +74,9 @@ public class RedisFFmpegFeederService implements MessageListener, ApplicationLis
         OutputStream ffmpegIn = ffmpegOutputStreams.get(channel);
 
         if (ffmpegIn == null) {
-            // This is the first frame for this stream, so start the FFmpeg process
-            try {
-                logger.info("First frame received for streamId: {}. Starting FFmpeg process.", streamId);
-                ffmpegIn = ffmpegProcessManager.startFFmpegProcess(streamId);
-                ffmpegOutputStreams.put(channel, ffmpegIn);
-            } catch (IOException e) {
-                logger.error("Failed to start FFmpeg process for streamId {}: {}", streamId, e.getMessage(), e);
-                // Handle cleanup: unsubscribe from Redis for this stream if FFmpeg fails to start
-                stopFeedingFFmpeg(streamId); // This method will also unsubscribe
-                return;
-            }
+            logger.info("First frame received for streamId: {}. Starting FFmpeg process.", streamId);
+			ffmpegIn = ffmpegProcessManager.startFFmpegProcess(streamId);
+			ffmpegOutputStreams.put(channel, ffmpegIn);
         }
 
         try {

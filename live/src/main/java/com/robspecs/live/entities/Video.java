@@ -13,9 +13,8 @@ import java.time.LocalDateTime;
 }, indexes = {
         // As per your explicit instructions, the 'Video' entity does not currently have a 'videoName' field.
         // Therefore, this index cannot be applied without adding a 'videoName' field.
-        // @Index(name = "idx_video_name", columnList = "videoName"),
-
-        // This index is implemented as 'upload_user_id' column exists due to the 'uploadUser' relationship.
+        // @Index(name = "idx_video_name", columnList = "videoName"
+		// This index is implemented as 'upload_user_id' column exists due to the 'uploadUser' relationship.
         @Index(name = "idx_upload_user_id", columnList = "upload_user_id")
 })
 public class Video {

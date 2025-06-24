@@ -20,7 +20,6 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
-
 @Configuration
 public class RedisConfig {
 
@@ -71,15 +70,14 @@ public class RedisConfig {
 	// NEW BEAN: RedisTemplate for raw binary data (byte[])
 	@Bean(name = "redisRawDataTemplate") // Give it a distinct name
 	public RedisTemplate<String, byte[]> redisRawDataTemplate(RedisConnectionFactory connectionFactory) {
-	    RedisTemplate<String, byte[]> template = new RedisTemplate<>();
-	    template.setConnectionFactory(connectionFactory);
-	    template.setKeySerializer(RedisSerializer.string());
-	    template.setValueSerializer(RedisSerializer.byteArray()); // REPLACEMENT
-	    template.afterPropertiesSet(); // Ensure serializers are set up before use
-	    logger.debug("RedisTemplate<String, byte[]> 'redisRawDataTemplate' bean created with byteArray serializer.");
-	    return template;
+		RedisTemplate<String, byte[]> template = new RedisTemplate<>();
+		template.setConnectionFactory(connectionFactory);
+		template.setKeySerializer(RedisSerializer.string());
+		template.setValueSerializer(RedisSerializer.byteArray()); // REPLACEMENT
+		template.afterPropertiesSet(); // Ensure serializers are set up before use
+		logger.debug("RedisTemplate<String, byte[]> 'redisRawDataTemplate' bean created with byteArray serializer.");
+		return template;
 	}
-
 
 //	@Bean
 //	public RedisMessageListenerContainer redisContainer(RedisConnectionFactory cf,
@@ -108,17 +106,16 @@ public class RedisConfig {
 	}
 
 	@Bean(name = "redisMessageListenerContainer") // Ensure correct name for injection by type
-	public RedisMessageListenerContainer redisMessageListenerContainer(
-	        RedisConnectionFactory cf,
-	        @Qualifier("redisMessageExecutor") TaskExecutor redisMessageExecutor) {
+	public RedisMessageListenerContainer redisMessageListenerContainer(RedisConnectionFactory cf,
+			@Qualifier("redisMessageExecutor") TaskExecutor redisMessageExecutor) {
 
-	    logger.info("Configuring RedisMessageListenerContainer.");
-	    RedisMessageListenerContainer container = new RedisMessageListenerContainer();
-	    container.setConnectionFactory(cf);
-	    container.setTaskExecutor(redisMessageExecutor);
+		logger.info("Configuring RedisMessageListenerContainer.");
+		RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+		container.setConnectionFactory(cf);
+		container.setTaskExecutor(redisMessageExecutor);
 
-	    logger.debug("RedisMessageListenerContainer bean created.");
-	    return container;
+		logger.debug("RedisMessageListenerContainer bean created.");
+		return container;
 	}
 
 	@Bean(name = "redisMessageExecutor") // Explicitly named for clarity
